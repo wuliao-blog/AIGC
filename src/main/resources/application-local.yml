@@ -8,14 +8,15 @@ spring:
         namespace: f923fb34-cb0a-4c06-8fca-ad61ea61a3f0
         group: DEFAULT_GROUP
         ip: 192.168.150.1
+      config:
+        namespace: ""
   config:
     import:
-      - nacos:${spring.application.name}.yaml # 导入本服务的配置
+      - optional:nacos:${spring.application.name}.yaml # 导入本服务的配置（不存在也允许启动）
       - nacos:shared-spring.yaml # 共享spring配置
       - nacos:shared-redis.yaml # 共享redis配置
       - nacos:shared-logs.yaml # 共享日志配置
       - nacos:shared-feign.yaml # 共享feign配置
-      - nacos:aigc-service.yaml
       - nacos:shared-mybatis.yaml # 共享mybatis配置
 logging:
   level:
