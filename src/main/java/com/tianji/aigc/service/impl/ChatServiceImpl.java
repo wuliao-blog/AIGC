@@ -7,12 +7,13 @@ import com.tianji.aigc.vo.ChatEventVO;
 import com.tianji.config.SystemPromptConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBucket;
+import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -21,9 +22,25 @@ public class ChatServiceImpl implements ChatService {
 
     private final ChatClient chatClient;
     private final SystemPromptConfig systemPromptConfig;
-    // 存储大模型的生成状态，这里采用ConcurrentHashMap是确保线程安全
-    // 目前的版本暂时用Map实现，如果考虑分布式环境的话，可以考虑用redis来实现
-    private static final Map<String, Boolean> GENERATE_STATUS = new ConcurrentHashMap<>();
+    private final RedissonClient redissonClient;
+
+    /**
+     * Redis key 前缀：大模型生成状态
+     * 完整 key 形如：aigc:generate:status:{sessionId}
+     */
+    private static final String GENERATE_STATUS_KEY_PREFIX = "aigc:generate:status:";
+    /**
+     * 生成状态 key 的过期时间，防止 key 泄漏（会话异常结束未清理的场景）
+     */
+    private static final long GENERATE_STATUS_EXPIRE = 10;
+    private static final TimeUnit GENERATE_STATUS_EXPIRE_UNIT = TimeUnit.MINUTES;
+
+    /**
+     * 获取某个会话的生成状态 bucket
+     */
+    private RBucket<Boolean> getStatusBucket(String sessionId) {
+        return redissonClient.getBucket(GENERATE_STATUS_KEY_PREFIX + sessionId);
+    }
 
     @Override
     public Flux<ChatEventVO> chat(String question, String sessionId) {
@@ -35,11 +52,23 @@ public class ChatServiceImpl implements ChatService {
                 .user(question)
                 .stream()
                 .chatResponse()
-                .doFirst(() -> GENERATE_STATUS.put(sessionId, true)) // 第一次输出内容时执行
-                .doOnError(throwable -> GENERATE_STATUS.remove(sessionId)) // 出现异常时，删除标识
-                .doOnComplete(() -> GENERATE_STATUS.remove(sessionId)) // 完成时执行，删除标识
-                .takeWhile(response -> { // 通过返回值来控制Flux流是否继续，true：继续，false：终止
-                    return GENERATE_STATUS.getOrDefault(sessionId, false);
+                .doFirst(() -> {
+                    // 第一次输出前，在 Redis 中标记该会话正在生成
+                    getStatusBucket(sessionId).set(true, GENERATE_STATUS_EXPIRE, GENERATE_STATUS_EXPIRE_UNIT);
+                })
+                .doOnError(throwable -> {
+                    // 出现异常时，删除 Redis 中的状态标记
+                    getStatusBucket(sessionId).delete();
+                })
+                .doOnComplete(() -> {
+                    // 正常完成时，删除 Redis 中的状态标记
+                    getStatusBucket(sessionId).delete();
+                })
+                .takeWhile(response -> {
+                    // 从 Redis 读取状态，true 继续 Flux 流，false 终止
+                    // 分布式环境下，stop() 可以由任意节点调用，通过 Redis 广播终止信号
+                    Boolean status = getStatusBucket(sessionId).get();
+                    return Boolean.TRUE.equals(status);
                 })
                 .map(chatResponse -> {
                     // 获取大模型的输出的内容
@@ -57,7 +86,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public void stop(String sessionId) {
-       // 移除标记
-        GENERATE_STATUS.remove(sessionId);
+        // 从 Redis 中移除生成状态标记
+        // takeWhile() 会在下一次检查时读取不到 true，从而终止 Flux 流
+        getStatusBucket(sessionId).delete();
+        log.info("会话 {} 的生成已被用户停止", sessionId);
     }
 }
