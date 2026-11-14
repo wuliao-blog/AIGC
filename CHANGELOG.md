@@ -84,3 +84,41 @@
 
 - 无真实硬编码密钥；仅保留教学环境 `nacos/nacos` 默认口令与内网地址。
 - ⚠️ `application.yml` 中 `spring.ai.dashscope.api-key` 为占位字符串 `sk-placeholder-for-local-dev`（**非真实密钥**），本地开发请替换为环境变量或 Nacos 配置，切勿把真实 API Key 提交进仓库。
+
+---
+
+## 2026-11-14
+
+> 代码编写于 2026-11-13 ~ 11-14，本次推送于 2026-11-14。本地已有提交：`8b3fc3d`（4、完成了会话记忆功能）。
+
+**本次推送内容：完成多轮会话记忆功能（基于 Redis 持久化的 Spring AI ChatMemory），并补充历史消息查询接口。**
+
+### 新增 / 修改（13 个文件，+355 行）
+
+**`aigc/memory/` 新包 —— 自定义 Redis 记忆存储**
+- `RedisChatMemoryRepository.java` — 实现 Spring AI `ChatMemoryRepository` SPI，用 Redis List 存会话消息（key `CHAT:{conversationId}`），实现 `findConversationIds` / `findByConversationId` / `saveAll` / `deleteByConversationId`
+- `MyMessage.java` — 序列化中间 DTO（扁平承载 messageType / textContent / metadata / media / toolCalls / toolResponses / params）
+- `MessageUtil.java` — `Message ⇄ JSON` 双向转换，`toMessage()` 按 `MessageType` 分派还原四类具体消息
+- `package-info.java` — 包级 `@NonNullApi` / `@NonNullFields`
+
+**配置与装配**
+- `aigc/config/SpringAIConfig.java`（新增）— 装配 `ChatMemoryRepository` → `MessageWindowChatMemory`（`maxMessages` 由 `tj.ai.memory.max` 注入）→ `MessageChatMemoryAdvisor`，并把记忆 Advisor 挂进 `ChatClient.defaultAdvisors`
+- `resources/application.yml` — 新增 `tj.ai.memory.max: 100`
+- `aigc/service/ChatService.java` — 新增静态方法 `getConversationId(sessionId)`，规则 `userId_sessionId`
+- `aigc/service/impl/ChatServiceImpl.java` — 对话时 `.advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))` 运行时传入对话 ID
+
+**历史消息查询**
+- `aigc/controller/SessionController.java` — 新增 `GET /session/{sessionId}`
+- `aigc/service/ChatSessionService.java` / `impl/ChatSessionServiceImpl.java` — `chatMemory.get(conversationId)` 后过滤只保留 USER / ASSISTANT，转 `MessageVO`
+- `aigc/vo/MessageVO.java`、`aigc/enums/MessageTypeEnum.java` — 历史消息响应体与业务枚举（USER=1 / ASSISTANT=2）
+
+### 文档
+- `README.md` — **新增「会话记忆（重点）」大章节**：Spring AI ChatMemory 三层抽象表、装配链路、Redis 存储设计、**7 个难点重点**（Message 接口多态序列化、`saveAll` 全量覆盖语义、对话 ID 隔离、窗口策略、历史查询类型过滤、与停止生成共用 Redis、包级非空约束）、已知问题与改进方向、消息存储格式示例；同步更新接口表、技术栈、目录结构、配置说明
+- `CHANGELOG.md` — 追加本节
+
+### ⚠️ 本次发现的代码隐患（未擅自修改，仅记录）
+- 项目里存在**两个 `SpringAIConfig`**：`com.tianji.config`（旧版，仅 `loggerAdvisor`）与 `com.tianji.aigc.config`（新版，含记忆 Advisor），都是 `@Configuration` 且都定义 `chatClient` / `loggerAdvisor` Bean → 可能触发 `BeanDefinitionOverrideException`，或装配到不带记忆 Advisor 的 `ChatClient` 导致记忆失效。建议删除旧版。
+- 其他改进点：`KEYS` 命令阻塞风险、`saveAll` 非原子、Redis List 无 TTL、按条数而非 Token 裁剪 —— 详见 README「已知问题与改进方向」。
+
+### 安全核查
+无新增硬编码密钥；沿用教学环境 `nacos/nacos` 默认口令、`sk-placeholder-for-local-dev` 占位符与内网地址示例值。
