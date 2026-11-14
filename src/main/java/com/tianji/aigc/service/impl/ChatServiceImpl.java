@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
@@ -44,11 +45,15 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public Flux<ChatEventVO> chat(String question, String sessionId) {
+        // 获取对话id
+        var conversationId = ChatService.getConversationId(sessionId);
+
         return this.chatClient.prompt()
                 .system(promptSystem -> promptSystem
                         .text(this.systemPromptConfig.getChatSystemMessage().get()) // 设置系统提示语
                         .param("now", DateUtil.now()) // 设置当前时间的参数
                 )
+                .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
                 .user(question)
                 .stream()
                 .chatResponse()

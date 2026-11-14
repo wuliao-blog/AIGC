@@ -39,3 +39,5 @@ tj:
           data-id: system-chat-message.txt
           group: DEFAULT_GROUP
           timeout-ms: 20000
+    memory:
+      max: 100 #存储最大的聊天记录数
