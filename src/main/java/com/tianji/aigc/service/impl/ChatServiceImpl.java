@@ -11,6 +11,7 @@ import org.redisson.api.RBucket;
 import org.redisson.api.RedissonClient;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
@@ -24,7 +25,7 @@ public class ChatServiceImpl implements ChatService {
     private final ChatClient chatClient;
     private final SystemPromptConfig systemPromptConfig;
     private final RedissonClient redissonClient;
-
+    private final ChatMemory chatMemory;
     /**
      * Redis key 前缀：大模型生成状态
      * 完整 key 形如：aigc:generate:status:{sessionId}
@@ -47,7 +48,9 @@ public class ChatServiceImpl implements ChatService {
     public Flux<ChatEventVO> chat(String question, String sessionId) {
         // 获取对话id
         var conversationId = ChatService.getConversationId(sessionId);
-
+        // 大模型输出内容的缓存器，用于在输出中断后的数据存储
+        var outputBuilder = new StringBuilder();
+        
         return this.chatClient.prompt()
                 .system(promptSystem -> promptSystem
                         .text(this.systemPromptConfig.getChatSystemMessage().get()) // 设置系统提示语
@@ -65,6 +68,10 @@ public class ChatServiceImpl implements ChatService {
                     // 出现异常时，删除 Redis 中的状态标记
                     getStatusBucket(sessionId).delete();
                 })
+                .doOnCancel(() -> {
+                    // 当输出被取消时，保存输出的内容到历史记录中
+                    this.saveStopHistoryRecord(conversationId, outputBuilder.toString());
+                })
                 .doOnComplete(() -> {
                     // 正常完成时，删除 Redis 中的状态标记
                     getStatusBucket(sessionId).delete();
@@ -78,6 +85,8 @@ public class ChatServiceImpl implements ChatService {
                 .map(chatResponse -> {
                     // 获取大模型的输出的内容
                     String text = chatResponse.getResult().getOutput().getText();
+                    // 追加到输出内容中
+                    outputBuilder.append(text);
                     // 封装响应对象
                     return ChatEventVO.builder()
                             .eventData(text)
@@ -87,6 +96,16 @@ public class ChatServiceImpl implements ChatService {
                 .concatWith(Flux.just(ChatEventVO.builder()  // 标记输出结束
                         .eventType(ChatEventTypeEnum.STOP.getValue())
                         .build()));
+    }
+
+    /**
+     * 保存停止输出的记录
+     *
+     * @param conversationId 会话id
+     * @param content        大模型输出的内容
+     */
+    private void saveStopHistoryRecord(String conversationId, String content) {
+        this.chatMemory.add(conversationId, new AssistantMessage(content));
     }
 
     @Override
