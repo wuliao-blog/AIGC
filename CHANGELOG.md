@@ -132,3 +132,26 @@
 - `com.tianji.config` 包仍保留 `AIProperties.java` 与 `SystemPromptConfig.java`（Nacos 提示词配置），不受影响。
 - 文档同步：`README.md` 把「已知问题」里的冲突项标记为已修复、目录结构去掉旧版条目；`CHANGELOG.md` 追加本节。
 - 安全核查：纯删除操作，无新增内容与密钥。
+
+---
+
+## 2026-11-14（第 5 项）：解决「停止生成导致会话记忆丢失」bug
+
+> 依据语雀《（一）基本对话与课程咨询》第 10 章「解决bug」（10.1 bug重现 / 10.2 bug解决）分析总结。本地提交：`2eae70c` + 本次补充修复。
+
+**bug 介绍**：停止生成、会话记忆单独测试都正常，组合起来出问题——点「停止」后，大模型已输出的内容不写入 Redis 记忆，下一轮对话丢失这段回答。复现方式：在 `RedisChatMemoryRepository#saveAll` 与 `ChatServiceImpl#chat` 打断点，正常流会调 `saveAll` 两次（USER + ASSISTANT），点停止后只调一次（仅 USER）。
+
+**根因**：停止靠 `takeWhile` 返回 false **中断（cancel）Flux** 实现；Flux 被 cancel 后 Spring AI 的 `MessageChatMemoryAdvisor` 不触发 `ChatMemory.add()`，自然不调 `ChatMemoryRepository#saveAll()`。文档注明「不确定是 Spring AI 故意设计还是版本问题（1.0.0 当时为最新版）」。
+
+**解决方案**：框架不记就自己记——`StringBuilder` 在 `map` 中累积每段流式文本；`doOnCancel` 在流中断时手动 `chatMemory.add(conversationId, new AssistantMessage(content))`；只补 ASSISTANT 一条（USER 已由框架首次 `saveAll` 写入）。
+⚠️ **重点**：`doOnCancel` 必须放在 `takeWhile` **之上**，否则 cancel 信号传不到、回调不生效。
+
+**本次推送代码**（`ChatServiceImpl.java`）
+- `2eae70c`：注入 `ChatMemory`、新增 `outputBuilder`、`map` 中 append、`doOnCancel` → `saveStopHistoryRecord()` → `chatMemory.add(...)`
+- 补充修复：
+  - 空内容跳过——刚发起就立刻停止时 `outputBuilder` 为空，避免写入空 `AssistantMessage`
+  - `doOnError` 异常中断同样补写已输出内容
+  - `AtomicBoolean historySaved` 保证 cancel / error 场景下只补写一次
+- `application.yml` 新增 `tj.ai.memory.type: redis`（预留记忆类型配置，当前代码尚未读取）
+
+**文档**：按确认采用从简方案，`README.md` 不扩写章节，本节记录 bug 与解决方案。

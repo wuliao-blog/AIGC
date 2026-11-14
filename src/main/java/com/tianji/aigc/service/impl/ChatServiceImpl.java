@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -50,7 +51,9 @@ public class ChatServiceImpl implements ChatService {
         var conversationId = ChatService.getConversationId(sessionId);
         // 大模型输出内容的缓存器，用于在输出中断后的数据存储
         var outputBuilder = new StringBuilder();
-        
+        // 保证中断场景下（取消 / 异常）助手消息只补写一次
+        var historySaved = new AtomicBoolean(false);
+
         return this.chatClient.prompt()
                 .system(promptSystem -> promptSystem
                         .text(this.systemPromptConfig.getChatSystemMessage().get()) // 设置系统提示语
@@ -67,10 +70,13 @@ public class ChatServiceImpl implements ChatService {
                 .doOnError(throwable -> {
                     // 出现异常时，删除 Redis 中的状态标记
                     getStatusBucket(sessionId).delete();
+                    // 异常中断同样不会触发 ChatMemory.add，需要补写已输出的内容
+                    this.saveStopHistoryRecord(conversationId, outputBuilder, historySaved);
                 })
                 .doOnCancel(() -> {
                     // 当输出被取消时，保存输出的内容到历史记录中
-                    this.saveStopHistoryRecord(conversationId, outputBuilder.toString());
+                    // 注意：doOnCancel 必须位于 takeWhile 之上，否则回调不生效
+                    this.saveStopHistoryRecord(conversationId, outputBuilder, historySaved);
                 })
                 .doOnComplete(() -> {
                     // 正常完成时，删除 Redis 中的状态标记
@@ -99,13 +105,25 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 保存停止输出的记录
+     * 补写中断场景下的助手消息（停止生成 / 异常中断）。
+     * <p>
+     * Flux 被 cancel 或异常中断时，Spring AI 不会触发 ChatMemory.add()，
+     * 需要手动把已输出的内容写入会话历史，否则下一轮对话会丢失这段回答。
      *
      * @param conversationId 会话id
-     * @param content        大模型输出的内容
+     * @param outputBuilder  已累积的输出内容
+     * @param historySaved   保证只补写一次，避免 cancel / error 重复写入
      */
-    private void saveStopHistoryRecord(String conversationId, String content) {
-        this.chatMemory.add(conversationId, new AssistantMessage(content));
+    private void saveStopHistoryRecord(String conversationId, StringBuilder outputBuilder,
+                                       AtomicBoolean historySaved) {
+        String content = outputBuilder.toString();
+        // 用户刚发起就立刻停止时，还没有任何输出，不写入空的助手消息
+        if (content.isBlank()) {
+            return;
+        }
+        if (historySaved.compareAndSet(false, true)) {
+            this.chatMemory.add(conversationId, new AssistantMessage(content));
+        }
     }
 
     @Override
