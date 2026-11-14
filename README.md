@@ -155,9 +155,10 @@ public void saveAll(String conversationId, List<Message> messages) {
 
 ### 已知问题与改进方向（如实记录）
 
+> ✅ **已修复（2026-11-14）**：初版曾存在两个 `SpringAIConfig`（`com.tianji.config` 旧版仅挂 `loggerAdvisor`、`com.tianji.aigc.config` 新版含记忆 Advisor），两者都定义 `chatClient` / `loggerAdvisor` Bean，会触发 `BeanDefinitionOverrideException` 或装配到不带记忆的 `ChatClient`。**现已删除旧版**，只保留 `aigc/config/SpringAIConfig`，记忆链路唯一可用。
+
 | 问题 | 影响 | 建议 |
 |------|------|------|
-| ⚠️ **两个 `SpringAIConfig` 并存**：`com.tianji.config` 与 `com.tianji.aigc.config` 各有一个，都是 `@Configuration`，且都定义 `chatClient`、`loggerAdvisor` Bean | Spring Boot 默认禁止 Bean 覆盖，启动可能报 `BeanDefinitionOverrideException`；即便允许覆盖，也可能装配到不带记忆 Advisor 的那个 `ChatClient`，导致记忆失效 | **删除旧的 `com.tianji.config.SpringAIConfig`**，只保留 `aigc/config` 版本 |
 | `findConversationIds()` 用 `KEYS prefix*` | Redis 单线程，`KEYS` 在数据量大时会阻塞整个实例 | 改 `SCAN` 游标遍历，或维护会话 ID 集合 |
 | `saveAll` = 先删后逐条 `rightPush` | 非原子；中途异常会留下半截历史 | 用 `pipeline` 批量写，或改为单个 String 存整个 JSON 数组一次写入 |
 | Redis List 无 TTL | 历史消息永久占用内存 | 按业务设过期时间，或定期归档到 MySQL |
@@ -226,12 +227,11 @@ tj-aigc/
     │   ├── java/com/tianji/
     │   │   ├── AIGCApplication.java                    # 启动类（@EnableAsync）
     │   │   ├── config/
-    │   │   │   ├── SpringAIConfig.java                # ⚠️ 旧版（仅 loggerAdvisor），建议删除
     │   │   │   ├── AIProperties.java                  # 绑定 tj.ai.prompt.*
     │   │   │   └── SystemPromptConfig.java            # Nacos 拉取提示词 + 热更新
     │   │   └── aigc/
     │   │       ├── config/SessionProperties.java      # tj.ai.session 配置
-    │   │       ├── config/SpringAIConfig.java        # ✅ 当前版：ChatClient + 记忆 Advisor 装配
+    │   │       ├── config/SpringAIConfig.java        # ChatClient + 记忆 Advisor 唯一装配点
     │   │       ├── memory/                           # 会话记忆实现
     │   │       │   ├── RedisChatMemoryRepository.java  # ChatMemoryRepository 的 Redis 实现
     │   │       │   ├── MyMessage.java                  # 序列化中间 DTO

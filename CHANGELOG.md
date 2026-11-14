@@ -116,9 +116,19 @@
 - `README.md` — **新增「会话记忆（重点）」大章节**：Spring AI ChatMemory 三层抽象表、装配链路、Redis 存储设计、**7 个难点重点**（Message 接口多态序列化、`saveAll` 全量覆盖语义、对话 ID 隔离、窗口策略、历史查询类型过滤、与停止生成共用 Redis、包级非空约束）、已知问题与改进方向、消息存储格式示例；同步更新接口表、技术栈、目录结构、配置说明
 - `CHANGELOG.md` — 追加本节
 
-### ⚠️ 本次发现的代码隐患（未擅自修改，仅记录）
-- 项目里存在**两个 `SpringAIConfig`**：`com.tianji.config`（旧版，仅 `loggerAdvisor`）与 `com.tianji.aigc.config`（新版，含记忆 Advisor），都是 `@Configuration` 且都定义 `chatClient` / `loggerAdvisor` Bean → 可能触发 `BeanDefinitionOverrideException`，或装配到不带记忆 Advisor 的 `ChatClient` 导致记忆失效。建议删除旧版。
-- 其他改进点：`KEYS` 命令阻塞风险、`saveAll` 非原子、Redis List 无 TTL、按条数而非 Token 裁剪 —— 详见 README「已知问题与改进方向」。
+### ⚠️ 本次发现的代码隐患
+- 曾存在**两个 `SpringAIConfig`**：`com.tianji.config`（旧版，仅 `loggerAdvisor`）与 `com.tianji.aigc.config`（新版，含记忆 Advisor），都是 `@Configuration` 且都定义 `chatClient` / `loggerAdvisor` Bean → 可能触发 `BeanDefinitionOverrideException`，或装配到不带记忆 Advisor 的 `ChatClient` 导致记忆失效。**当日已修复，见下方补充推送**。
+- 其他改进点（`KEYS` 命令阻塞风险、`saveAll` 非原子、Redis List 无 TTL、按条数而非 Token 裁剪）仍待优化 —— 详见 README「已知问题与改进方向」。
 
 ### 安全核查
 无新增硬编码密钥；沿用教学环境 `nacos/nacos` 默认口令、`sk-placeholder-for-local-dev` 占位符与内网地址示例值。
+
+---
+
+## 2026-11-14（补充推送）：删除重复配置类，修复 Bean 冲突
+
+- **删除** `src/main/java/com/tianji/config/SpringAIConfig.java`（旧版，只装配 `ChatClient` + `SimpleLoggerAdvisor`，不含记忆 Advisor）。
+- **保留** `src/main/java/com/tianji/aigc/config/SpringAIConfig.java` 作为 `ChatClient` 与 `MessageChatMemoryAdvisor` 的**唯一装配点**，消除 Bean 定义冲突，确保会话记忆链路一定生效。
+- `com.tianji.config` 包仍保留 `AIProperties.java` 与 `SystemPromptConfig.java`（Nacos 提示词配置），不受影响。
+- 文档同步：`README.md` 把「已知问题」里的冲突项标记为已修复、目录结构去掉旧版条目；`CHANGELOG.md` 追加本节。
+- 安全核查：纯删除操作，无新增内容与密钥。
