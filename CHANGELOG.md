@@ -206,3 +206,25 @@
 无密钥、无本地绝对路径、无旧品牌字样。
 
 ---
+
+## 2026-11-18（交易服务 Feign 客户端）
+
+> 推送于 2026-11-18。与上一批 course 客户端、Function Calling 工具同属 tj-api 微服务对外接口。
+
+**本次推送内容：新增 trade-service（交易服务）Feign 客户端及降级工厂，扩展大模型可调用的工具体系**
+
+### 新增（4 个文件，路径 `src/main/java/com/tianji/api/client/trade/`）
+- `TradeClient.java` — 交易服务核心接口：统计课程报名人数、统计学生报名课程数、检查当前用户是否已报名、统计课程购买/退款状态、预下单（生成订单 id 与可用优惠券）
+- `CartClient.java` — 购物车接口：添加课程到购物车
+- `fallback/TradeClientFallback.java` — 交易服务降级工厂，异常时返回空 Map / false / 空 DTO，避免雪崩
+- `fallback/CartClientFallback.java` — 购物车降级工厂，异常时记录日志并静默返回
+
+### 说明
+- 与 `course` 包并列，均指向 `trade-service`，通过 `@FeignClient` 的 `contextId` 区分 trade / cart。
+- 带 `fallbackFactory` 降级：微服务调用失败时返回安全默认值，是大模型工具调用链路的容错基础。
+- 后续可作为 Function Calling 工具（如「查询课程报名人数」「检查我是否已报名」）的数据源。
+
+### 安全核查
+纯接口声明与降级实现，无密钥、无本地绝对路径、无旧品牌字样。
+
+---
