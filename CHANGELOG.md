@@ -254,3 +254,31 @@
 无密钥、无本地绝对路径、无旧品牌字样。
 
 ---
+
+## 2026-11-18（历史消息保留工具外部参数）
+
+> 推送于 2026-11-18。修复「查看历史会话时丢失课程卡片 / 订单卡片」的问题：把工具调用产生的结构化参数随助手消息一起持久化。
+
+**本次推送内容：工具外部参数写入会话历史并随历史消息回传前端，同时修复两处工具类隐患**
+
+### 新增（1 个文件）
+- `aigc/memory/MyAssistantMessage.java` — 继承 `AssistantMessage`，扩展 `params` 字段，使助手消息可携带工具产生的结构化数据（课程/订单卡片）
+
+### 修改（9 个文件）
+- `aigc/service/impl/ChatServiceImpl.java` — 流结束（finishReason=STOP）时以 messageId 为 key 存 `requestId` 到 `ToolResultHolder`；`.toolContext()` 透传 requestId + userId；工具结果仍以 PARAM 事件回填前端
+- `aigc/memory/MessageUtil.java` — `toJson()` 存历史时按 messageId→requestId 取出 params 写入 `MyMessage` 并清理 messageId 映射；`toMessage()` 反序列化助手消息时用 `MyAssistantMessage` 还原 params
+- `aigc/service/impl/ChatSessionServiceImpl.java` — 读取历史消息时，若为 `MyAssistantMessage` 则把 params 一并放入 `MessageVO` 返回前端
+- `aigc/constants/Constant.java` — 新增 `STOP`、`ID` 常量
+- `aigc/config/SpringAIConfig.java` — **修复隐患**：移除重复的 `.defaultTools(courseTools)`，只保留 `.defaultTools(courseTools, orderTools)`
+- `aigc/config/ToolResultHolder.java`、`aigc/tools/CourseTools.java`、`aigc/tools/OrderTools.java`、`aigc/tools/result/CourseInfo.java`、`aigc/tools/result/PrePlaceOrder.java` — 随参数持久化链路调整（结果存入 holder 供历史消息读取）
+
+### 工作原理
+1. 工具（CourseTools / OrderTools）把结果以 requestId 为 key 存入 `ToolResultHolder`，同时当前流以 PARAM 事件实时回填前端。
+2. 大模型输出结束（STOP）时，把「本次消息 messageId → requestId」的映射也存入 holder。
+3. 会话记忆持久化（`MessageUtil.toJson`）时：用 messageId 查到 requestId，再用 requestId 取出 params，写入 `MyMessage.params` 一起存进 Redis；随后清理临时映射。
+4. 回放历史（`MessageUtil.toMessage` + `ChatSessionServiceImpl.queryBySessionId`）时：用 `MyAssistantMessage` 还原 params，经 `MessageVO.params` 返回前端，历史消息也能渲染课程/订单卡片。
+
+### 安全核查
+无密钥、无本地绝对路径、无旧品牌字样。
+
+---
