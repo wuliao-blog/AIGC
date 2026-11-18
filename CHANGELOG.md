@@ -155,3 +155,24 @@
 - `application.yml` 新增 `tj.ai.memory.type: redis`（预留记忆类型配置，当前代码尚未读取）
 
 **文档**：按确认采用从简方案，`README.md` 不扩写章节，本节记录 bug 与解决方案。
+
+## 2026-11-18
+
+> 推送于 2026-11-18。为后续大模型应用开发的 Function Calling 工具调用准备数据源接口。
+
+**本次推送内容：新增 tj-api 微服务的课程服务 Feign 客户端（与 tj-aigc 并列的另一个微服务）**
+
+### 新增（4 个文件，路径 `src/main/java/com/tianji/api/client/course/`）
+- `CourseClient.java` — 课程服务核心接口：按课程 ID 查完整信息/基础信息/索引数据、按老师查出题讲课数、按小节查媒资、按媒资查引用次数、批量查课程简单信息
+- `CatalogueClient.java` — 按目录 ID 列表批量查询目录基础信息
+- `CategoryClient.java` — 查询全部一级课程分类
+- `SubjectClient.java` — 按学科 ID 列表查询学科信息
+
+### 说明
+- 四个接口均通过 `@FeignClient(value = "course-service")` 调用课程微服务，是大模型工具调用（Function Calling）对接课程数据的入口。
+- 作为 tj-api 微服务代码，与现有 `com.tianji.aigc` 包并列存放，保留原始包路径 `com.tianji.api.client.course`，便于后续按相同结构继续补充其他 Feign 客户端。
+
+### 安全核查
+纯接口声明，无密钥、无本地绝对路径、无旧品牌字样。
+
+---
