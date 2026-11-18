@@ -176,3 +176,33 @@
 纯接口声明，无密钥、无本地绝对路径、无旧品牌字样。
 
 ---
+
+## 2026-11-18（Function Calling 工具接入）
+
+> 推送于 2026-11-18。本地 commit 的课程查询工具代码，与上一批 course Feign 客户端配套。
+
+**本次推送内容：接入 Function Calling，大模型可自主调用课程查询工具，并把工具结果回填到前端**
+
+### 新增（4 个文件）
+- `aigc/tools/CourseTools.java` — `@Tool` 标注的 `queryCourseById` 工具，通过 `CourseClient.baseInfo()` 查询课程，并把结果按「requestId + 字段名」存入 `ToolResultHolder`
+- `aigc/tools/result/CourseInfo.java` — 工具返回的课程 VO，用 `@JsonPropertyDescription` 描述字段供大模型理解；价格分转元并四舍五入
+- `aigc/config/ToolResultHolder.java` — `ConcurrentHashMap` 工具结果保持器，按 requestId 隔离并发请求，支持 put/get/remove
+- `aigc/constants/Constant.java` — 工具描述、参数描述、REQUEST_ID 上下文 key 常量
+
+### 修改（2 个文件）
+- `aigc/config/SpringAIConfig.java` — `ChatClient` 增加 `.defaultTools(courseTools)`，注册默认工具
+- `aigc/service/impl/ChatServiceImpl.java` — 生成 requestId 并经 `.toolContext()` 传给工具；流结束后用 `.concatWith()` 读取工具结果，以 `PARAM` 事件回填前端，随后发送 STOP
+
+### 工作原理
+1. 大模型识别用户意图后自主调用 `queryCourseById`，工具把结构化课程结果存入 `ToolResultHolder`（key = 请求 id）。
+2. SSE 流结束前，`ChatServiceImpl` 按同一个 requestId 取出结果，追加一个 `PARAM` 事件推送给前端，前端可据此渲染课程卡片等结构化 UI。
+3. `ToolResultHolder.remove()` 及时清理，避免内存泄漏。
+
+### 说明
+- 工具结果通过 `ToolContext` 传递 requestId，实现「同一次请求内工具 → 服务」的数据串联，避免多用户并发串数据。
+- 与上一批 `com.tianji.api.client.course` 四个 Feign 客户端配套使用；这些客户端保留在仓库中未改动。
+
+### 安全核查
+无密钥、无本地绝对路径、无旧品牌字样。
+
+---

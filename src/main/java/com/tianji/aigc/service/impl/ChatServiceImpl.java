@@ -1,6 +1,10 @@
 package com.tianji.aigc.service.impl;
 
+import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.date.DateUtil;
+import cn.hutool.core.util.IdUtil;
+import com.tianji.aigc.config.ToolResultHolder;
+import com.tianji.aigc.constants.Constant;
 import com.tianji.aigc.enums.ChatEventTypeEnum;
 import com.tianji.aigc.service.ChatService;
 import com.tianji.aigc.vo.ChatEventVO;
@@ -15,6 +19,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -45,6 +50,12 @@ public class ChatServiceImpl implements ChatService {
         return redissonClient.getBucket(GENERATE_STATUS_KEY_PREFIX + sessionId);
     }
 
+    // 生成请求id
+    String requestId = IdUtil.fastSimpleUUID();
+
+    // 输出结束的标记
+    private static final ChatEventVO STOP_EVENT = ChatEventVO.builder().eventType(ChatEventTypeEnum.STOP.getValue()).build();
+
     @Override
     public Flux<ChatEventVO> chat(String question, String sessionId) {
         // 获取对话id
@@ -60,6 +71,7 @@ public class ChatServiceImpl implements ChatService {
                         .param("now", DateUtil.now()) // 设置当前时间的参数
                 )
                 .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
+                .toolContext(Map.of(Constant.REQUEST_ID, requestId)) //通过工具上下文传递参数
                 .user(question)
                 .stream()
                 .chatResponse()
@@ -99,9 +111,21 @@ public class ChatServiceImpl implements ChatService {
                             .eventType(ChatEventTypeEnum.DATA.getValue())
                             .build();
                 })
-                .concatWith(Flux.just(ChatEventVO.builder()  // 标记输出结束
-                        .eventType(ChatEventTypeEnum.STOP.getValue())
-                        .build()));
+                .concatWith(Flux.defer(() -> {
+                    // 通过请求id获取到参数列表，如果不为空，就将其追加到返回结果中
+                    var map = ToolResultHolder.get(requestId);
+                    if (CollUtil.isNotEmpty(map)) {
+                        ToolResultHolder.remove(requestId); // 清除参数列表
+
+                        // 响应给前端的参数数据
+                        var chatEventVO = ChatEventVO.builder()
+                                .eventData(map)
+                                .eventType(ChatEventTypeEnum.PARAM.getValue())
+                                .build();
+                        return Flux.just(chatEventVO, STOP_EVENT);
+                    }
+                    return Flux.just(STOP_EVENT);
+                }));
     }
 
     /**
