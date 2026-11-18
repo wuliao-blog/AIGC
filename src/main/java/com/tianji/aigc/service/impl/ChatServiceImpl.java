@@ -8,6 +8,7 @@ import com.tianji.aigc.constants.Constant;
 import com.tianji.aigc.enums.ChatEventTypeEnum;
 import com.tianji.aigc.service.ChatService;
 import com.tianji.aigc.vo.ChatEventVO;
+import com.tianji.common.utils.UserContext;
 import com.tianji.config.SystemPromptConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,6 +53,8 @@ public class ChatServiceImpl implements ChatService {
 
     // 生成请求id
     String requestId = IdUtil.fastSimpleUUID();
+    // 获取用户id
+    Long userId = UserContext.getUser();
 
     // 输出结束的标记
     private static final ChatEventVO STOP_EVENT = ChatEventVO.builder().eventType(ChatEventTypeEnum.STOP.getValue()).build();
@@ -71,7 +74,7 @@ public class ChatServiceImpl implements ChatService {
                         .param("now", DateUtil.now()) // 设置当前时间的参数
                 )
                 .advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, conversationId))
-                .toolContext(Map.of(Constant.REQUEST_ID, requestId)) //通过工具上下文传递参数
+                .toolContext(Map.of(Constant.REQUEST_ID, requestId, Constant.USER_ID, userId)) //通过工具上下文传递参数
                 .user(question)
                 .stream()
                 .chatResponse()

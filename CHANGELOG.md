@@ -228,3 +228,29 @@
 纯接口声明与降级实现，无密钥、无本地绝对路径、无旧品牌字样。
 
 ---
+
+## 2026-11-18（预下单工具接入）
+
+> 推送于 2026-11-18。用户本地完成"预下单（预下载）"功能后提交。
+
+**本次推送内容：新增订单预下单 Function Calling 工具，扩展工具上下文以透传用户身份**
+
+### 新增（2 个文件）
+- `aigc/tools/OrderTools.java` — `@Tool` 标注的 `prePlaceOrder` 工具（描述"购买课程预下单操作"），调用 `TradeClient.prePlaceOrder()` 完成预下单；从 `ToolContext` 取 userId 通过 `UserContext.setUser()` 注入身份，避免 Feign 调用 401；结果存入 `ToolResultHolder`
+- `aigc/tools/result/PrePlaceOrder.java` — 预下单结果 VO，``@JsonPropertyDescription` 描述订单字段供大模型理解；金额分转元保留两位，优惠券名按单券/叠加券格式化，计算实付金额
+
+### 修改（6 个文件）
+- `aigc/config/SpringAIConfig.java` — ChatClient 注入并注册 `OrderTools`（`.defaultTools(courseTools, orderTools)`）
+- `aigc/constants/Constant.java` — 新增 `USER_ID` 上下文 key、`PRE_PLACE_ORDER` 工具描述、`COURSE_IDS` 参数描述
+- `aigc/service/impl/ChatServiceImpl.java` — 从 `UserContext` 取 userId，`.toolContext()` 同时透传 requestId 与 userId（供工具注入身份）；保留 PARAM 事件回填逻辑
+- `aigc/config/ToolResultHolder.java`、`aigc/tools/CourseTools.java`、`aigc/tools/result/CourseInfo.java` — 随工具类调整（保持结果与 requestId 映射机制）
+
+### 工作原理
+1. 用户表达购买意图 → 大模型调用 `prePlaceOrder` 工具，工具从上下文拿到 userId 注入 `UserContext`，再 Feign 调用 trade-service 预下单。
+2. 预下单结果（金额/优惠/订单 id）存入 `ToolResultHolder`，流结束前由 `ChatServiceImpl` 以 `PARAM` 事件回填前端，供渲染下单确认卡片。
+3. requestId 串联同一请求内的工具结果，userId 透传解决工具调用链路的身份认证。
+
+### 安全核查
+无密钥、无本地绝对路径、无旧品牌字样。
+
+---
