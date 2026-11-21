@@ -282,3 +282,69 @@
 无密钥、无本地绝对路径、无旧品牌字样。
 
 ---
+
+## 2026-11-21（RAG 增强：向量存储 + QuestionAnswerAdvisor）
+
+> 推送于 2026-11-21。本次为 RAG（检索增强生成）能力接入，含**详细代码分析**与**待修复问题清单**。
+
+---
+
+### 一、本次推送内容
+
+**新增依赖（pom.xml）**
+- `spring-ai-starter-vector-store-redis` — Spring AI Redis 向量存储 starter
+- `jedis` — Redis Java 客户端（VectorStore 底层依赖）
+
+**新增文件（2 个）**
+- `aigc/controller/EmbeddingController.java` — 向量库管理接口，`@ConditionalOnBean(VectorStore.class)` 条件下才注册
+  - `POST /embedding` — 批量写入文档到向量库
+  - `GET /embedding` — 文本向量化
+  - `DELETE /embedding` — 按 id 删除向量
+  - `GET /embedding/search` — 相似度检索（topK=5）
+  - `GET /embedding/search/all` — 检索全部（topK=999）
+- `aigc/service/impl/ChatServiceeImpl.java` — ChatService 的 RAG 增强实现，替代原 `ChatServiceImpl`
+
+**删除文件（1 个）**
+- `aigc/service/impl/ChatServiceImpl.java` — 被 `ChatServiceeImpl` 取代（避免两个 `@Service` 同时实现 `ChatService` 导致启动冲突）
+
+**未推送的"修改"（10 个）**
+- SpringAIConfig / ToolResultHolder / Constant / MessageUtil / MyAssistantMessage / ChatSessionServiceImpl / CourseTools / OrderTools / CourseInfo / PrePlaceOrder：经 `diff --strip-trailing-cr` 核验，与远端内容**完全一致**，仅 CRLF/LF 行尾符差异，故未推送。
+
+---
+
+### 二、RAG 设计与数据流分析
+
+**核心链路**
+1. 离线灌库：`EmbeddingController.saveVectorStore()` 把文本转成 `Document` 写入 Redis VectorStore。
+2. 在线检索：`ChatServiceeImpl` 构造 `QuestionAnswerAdvisor`，配置相似度阈值 0.6、topK=6，随 prompt 注入 Advisor。
+3. 增强生成：用户提问时，Advisor 先从向量库召回相关文档，拼接进上下文，再交给大模型生成答案——答案基于私有知识，而非仅靠模型参数。
+
+**关键设计点**
+- `@ConditionalOnBean(VectorStore.class)`：向量库 Bean 不存在时 Controller 不注册，服务仍可启动（优雅降级思路是对的）。
+- Advisor 放在 `.advisors(advisor -> advisor.advisors(qaAdvisor).param(...))`：与 ChatMemory Advisor 共存，检索增强 + 多轮记忆叠加。
+- 保留了之前所有能力：SSE 流式、停止生成、Function Calling 工具、历史消息参数回填。
+
+---
+
+### 三、⚠️ 待修复问题清单（本次按原样推送，代码当前无法编译/启动）
+
+**P0 — 编译失败：`EmbeddingController.java`**
+1. 缺少 import：`@GetMapping`、`@DeleteMapping`、`SearchRequest`、`EmbeddingResponse` 均未导入。
+2. `embed()` 方法调用 `this.embeddingModel.embedForResponse(...)`，但类中**未声明 `embeddingModel` 字段**（只声明了 `vectorStore`），需要注入 `EmbeddingModel`。
+
+**P0 — 启动失败：`ChatServiceeImpl.java`**
+3. 类名拼写：`ChatServiceeImpl`（多一个 e），建议改回 `ChatServiceImpl`。
+4. `ragEnabled` 字段声明为 `private final boolean` 但从未使用；`@RequiredArgsConstructor` 会把它加入构造器，Spring 注入 boolean 类型 Bean 会失败。
+5. `qaAdvisor` 是实例字段初始化器，引用的 `this.vectorStore` 在 Lombok 构造器注入 final 字段**之前**执行，此时 `vectorStore` 为 null，构建 Advisor 会 NPE。应改为在构造器内或 `@PostConstruct` 中初始化，并判空。
+6. `vectorStore` 为 final 强依赖：未配置 VectorStore 时 `ChatServiceeImpl` 无法注入，与 `@ConditionalOnBean` 的优雅降级设计矛盾。建议用 `ObjectProvider<VectorStore>` 或 `@Autowired(required=false)`。
+
+**P1 — 配置**：Redis VectorStore 需要连接配置（spring.ai.vectorstore.redis.*），请确认 Nacos 配置已就绪。
+
+---
+
+### 四、建议修复顺序
+1. 补全 `EmbeddingController` 的 import + 注入 `EmbeddingModel`。
+2. `ChatServiceeImpl` 改名 `ChatServiceImpl`，删除 `ragEnabled`，用 `ObjectProvider<VectorStore>` 延迟获取，在构造器内判空后再建 `QuestionAnswerAdvisor`。
+3. 本地编译通过后再推一次修复版。
+
+---
